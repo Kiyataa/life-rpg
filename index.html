@@ -1,0 +1,2002 @@
+</select>
+            </div>
+            
+            <button class="btn-primary" onclick="startGame()">
+                🚀 Commencer l'Aventure
+            </button>
+        </div>
+    </div>
+
+    <!-- Prompt d'installation PWA -->
+    <div class="install-prompt" id="installPrompt" style="display: none;">
+        📱 Installer l'app pour une meilleure expérience !
+    </div>
+
+    <!-- Zone de notifications -->
+    <div class="notifications" id="notifications"></div>
+
+    <script>
+        // Configuration et état global
+        const CONFIG = {
+            API_BASE: 'https://api.liferpg.com', // Simulé pour GitHub Pages
+            VERSION: '2.0.0',
+            CACHE_NAME: 'life-rpg-v2',
+            DB_NAME: 'LifeRPGDB',
+            SYNC_INTERVAL: 30000 // 30 secondes
+        };
+
+        // État du jeu enrichi
+        let gameState = {
+            player: {
+                id: generatePlayerId(),
+                name: '',
+                email: '',
+                age: 25,
+                level: 1,
+                xp: 0,
+                totalXP: 0,
+                energy: 100,
+                maxEnergy: 100,
+                health: 100,
+                maxHealth: 100,
+                goal: '',
+                timezone: 'Europe/Paris',
+                completedQuests: 0,
+                currentStreak: 0,
+                lastLogin: new Date().toDateString(),
+                avatar: '🎮',
+                createdAt: Date.now(),
+                preferences: {
+                    notifications: true,
+                    darkMode: false,
+                    language: 'fr'
+                }
+            },
+            quests: [],
+            friends: [],
+            challenges: [],
+            achievements: [],
+            stats: {
+                dailyXP: 0,
+                weeklyXP: 0,
+                monthlyXP: 0
+            },
+            sync: {
+                lastSync: 0,
+                pending: []
+            }
+        };
+
+        // Base de données locale (IndexedDB)
+        class LifeRPGDB {
+            constructor() {
+                this.dbName = CONFIG.DB_NAME;
+                this.version = 1;
+            }
+
+            async init() {
+                return new Promise((resolve, reject) => {
+                    const request = indexedDB.open(this.dbName, this.version);
+                    
+                    request.onerror = () => reject(request.error);
+                    request.onsuccess = () => resolve(request.result);
+                    
+                    request.onupgradeneeded = (event) => {
+                        const db = event.target.result;
+                        
+                        // Store pour les données du joueur
+                        if (!db.objectStoreNames.contains('gameState')) {
+                            db.createObjectStore('gameState', { keyPath: 'id' });
+                        }
+                        
+                        // Store pour les quêtes
+                        if (!db.objectStoreNames.contains('quests')) {
+                            const questStore = db.createObjectStore('quests', { keyPath: 'id' });
+                            questStore.createIndex('date', 'date', { unique: false });
+                            questStore.createIndex('completed', 'completed', { unique: false });
+                        }
+                        
+                        // Store pour les amis
+                        if (!db.objectStoreNames.contains('friends')) {
+                            db.createObjectStore('friends', { keyPath: 'id' });
+                        }
+                        
+                        // Store pour le cache offline
+                        if (!db.objectStoreNames.contains('cache')) {
+                            db.createObjectStore('cache', { keyPath: 'key' });
+                        }
+                    };
+                });
+            }
+
+            async save(storeName, data) {
+                const db = await this.init();
+                const transaction = db.transaction([storeName], 'readwrite');
+                const store = transaction.objectStore(storeName);
+                return store.put(data);
+            }
+
+            async load(storeName, key) {
+                const db = await this.init();
+                const transaction = db.transaction([storeName], 'readonly');
+                const store = transaction.objectStore(storeName);
+                return store.get(key);
+            }
+
+            async loadAll(storeName) {
+                const db = await this.init();
+                const transaction = db.transaction([storeName], 'readonly');
+                const store = transaction.objectStore(storeName);
+                return store.getAll();
+            }
+        }
+
+        const db = new LifeRPGDB();
+
+        // Service Worker pour PWA
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                const swCode = `
+                    const CACHE_NAME = 'life-rpg-v2';
+                    const urlsToCache = [
+                        '/',
+                        '/manifest.json'
+                    ];
+
+                    self.addEventListener('install', (event) => {
+                        event.waitUntil(
+                            caches.open(CACHE_NAME)
+                                .then((cache) => cache.addAll(urlsToCache))
+                        );
+                    });
+
+                    self.addEventListener('fetch', (event) => {
+                        event.respondWith(
+                            caches.match(event.request)
+                                .then((response) => {
+                                    if (response) {
+                                        return response;
+                                    }
+                                    return fetch(event.request);
+                                })
+                        );
+                    });
+
+                    // Background sync pour les données
+                    self.addEventListener('sync', (event) => {
+                        if (event.tag === 'background-sync') {
+                            event.waitUntil(syncGameData());
+                        }
+                    });
+
+                    async function syncGameData() {
+                        console.log('🔄 Synchronisation en arrière-plan...');
+                    }
+                `;
+
+                const blob = new Blob([swCode], {type: 'application/javascript'});
+                const swUrl = URL.createObjectURL(blob);
+
+                navigator.serviceWorker.register(swUrl)
+                    .then(() => console.log('✅ Service Worker enregistré'))
+                    .catch(err => console.log('❌ Service Worker failed:', err));
+            });
+        }
+
+        // Gestion de l'installation PWA
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            document.getElementById('installPrompt').style.display = 'block';
+        });
+
+        document.getElementById('installPrompt').addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    showNotification('🎉 App installée avec succès !', 'success');
+                }
+                deferredPrompt = null;
+                document.getElementById('installPrompt').style.display = 'none';
+            }
+        });
+
+        // Génération d'ID unique
+        function generatePlayerId() {
+            return Math.random().toString(36).substr(2, 9).toUpperCase();
+        }
+
+        // Templates de quêtes enrichis
+        const questTemplates = {
+            santé: [
+                { title: "Hydratation Master", description: "Boire 2L d'eau aujourd'hui", xp: 25, energy: -5, health: 5, difficulty: "Facile", category: "hydratation" },
+                { title: "Warrior Training", description: "30 minutes d'exercice intense", xp: 50, energy: -20, health: 15, difficulty: "Moyen", category: "fitness" },
+                { title: "Nutrition Quest", description: "5 portions de fruits/légumes", xp: 30, energy: -5, health: 10, difficulty: "Facile", category: "nutrition" },
+                { title: "Rest Master", description: "8h de sommeil réparateur", xp: 40, energy: 50, health: 20, difficulty: "Moyen", category: "repos" }
+            ],
+            carrière: [
+                { title: "Focus Champion", description: "Terminer une tâche prioritaire", xp: 45, energy: -25, health: 0, difficulty: "Difficile", category: "productivité" },
+                { title: "Knowledge Seeker", description: "Apprendre une nouvelle compétence", xp: 35, energy: -15, health: 5, difficulty: "Moyen", category: "apprentissage" },
+                { title: "Organization Master", description: "Organiser l'espace de travail", xp: 20, energy: -10, health: 5, difficulty: "Facile", category: "organisation" },
+                { title: "Creative Break", description: "Pause créative de 20 minutes", xp: 25, energy: -5, health: 10, difficulty: "Facile", category: "créativité" }
+            ],
+            apprentissage: [
+                { title: "Reading Quest", description: "Lire 45 minutes", xp: 30, energy: -10, health: 5, difficulty: "Facile", category: "lecture" },
+                { title: "Skill Builder", description: "Pratiquer une compétence", xp: 40, energy: -20, health: 0, difficulty: "Moyen", category: "pratique" },
+                { title: "Knowledge Hunter", description: "Regarder contenu éducatif", xp: 25, energy: -5, health: 5, difficulty: "Facile", category: "média" },
+                { title: "Memory Palace", description: "Prendre des notes détaillées", xp: 20, energy: -10, health: 5, difficulty: "Facile", category: "documentation" }
+            ],
+            relations: [
+                { title: "Connection Master", description: "Appeler un proche", xp: 35, energy: -10, health: 15, difficulty: "Moyen", category: "famille" },
+                { title: "Kindness Spreader", description: "Faire un compliment sincère", xp: 25, energy: -5, health: 10, difficulty: "Facile", category: "bienveillance" },
+                { title: "Active Listener", description: "Écouter activement quelqu'un", xp: 30, energy: -5, health: 10, difficulty: "Moyen", category: "écoute" },
+                { title: "Social Planner", description: "Organiser une activité sociale", xp: 40, energy: -20, health: 15, difficulty: "Moyen", category: "organisation" }
+            ],
+            créativité: [
+                { title: "Creator Mode", description: "Créer quelque chose d'original", xp: 50, energy: -25, health: 10, difficulty: "Difficile", category: "création" },
+                { title: "Culinary Artist", description: "Cuisiner une nouvelle recette", xp: 35, energy: -20, health: 5, difficulty: "Moyen", category: "cuisine" },
+                { title: "Space Designer", description: "Redécorer un espace", xp: 25, energy: -15, health: 5, difficulty: "Facile", category: "design" },
+                { title: "Idea Generator", description: "Session brainstorming", xp: 20, energy: -10, health: 5, difficulty: "Facile", category: "réflexion" }
+            ],
+            équilibre: [
+                { title: "Zen Master", description: "Méditer 15 minutes", xp: 30, energy: 15, health: 20, difficulty: "Moyen", category: "méditation" },
+                { title: "Digital Detox", description: "1h sans écrans", xp: 35, energy: 20, health: 15, difficulty: "Difficile", category: "détox" },
+                { title: "Nature Connection", description: "Sortir dans la nature", xp: 40, energy: 10, health: 25, difficulty: "Facile", category: "nature" },
+                { title: "Reflection Time", description: "Journal intime", xp: 25, energy: -5, health: 15, difficulty: "Facile", category: "introspection" }
+            ]
+        };
+
+        // Système de météo (API simulée)
+        async function updateWeather() {
+            try {
+                const weatherConditions = ['☀️', '⛅', '🌤️', '🌧️', '⛈️', '❄️'];
+                const weather = {
+                    condition: weatherConditions[Math.floor(Math.random() * weatherConditions.length)],
+                    temperature: Math.floor(Math.random() * 20) + 10,
+                    description: 'Belle journée',
+                    bonus: 'Parfait pour une activité en extérieur !'
+                };
+
+                document.getElementById('weatherWidget').innerHTML = `
+                    ${weather.condition} ${weather.temperature}°C - ${weather.description}
+                    <br><small style="color: #27ae60;">${weather.bonus}</small>
+                `;
+
+                // Bonus météo pour certaines quêtes
+                if (weather.condition === '☀️') {
+                    gameState.quests.forEach(quest => {
+                        if (quest.category === 'nature' && !quest.weatherBonus) {
+                            quest.xp += 10;
+                            quest.weatherBonus = true;
+                        }
+                    });
+                }
+            } catch (error) {
+                console.log('Météo non disponible');
+            }
+        }
+
+        // Système de synchronisation cloud (simulé)
+        class CloudSync {
+            static async syncToCloud(data) {
+                try {
+                    localStorage.setItem('life-rpg-cloud-backup', JSON.stringify({
+                        ...data,
+                        lastSync: Date.now()
+                    }));
+                    console.log('✅ Synchronisation cloud simulée');
+                    return true;
+                } catch (error) {
+                    console.error('❌ Erreur sync cloud:', error);
+                    return false;
+                }
+            }
+
+            static async syncFromCloud(playerId) {
+                try {
+                    const cloudData = localStorage.getItem('life-rpg-cloud-backup');
+                    if (cloudData) {
+                        return JSON.parse(cloudData);
+                    }
+                    return null;
+                } catch (error) {
+                    console.error('❌ Erreur récupération cloud:', error);
+                    return null;
+                }
+            }
+
+            static async findFriends(searchTerm) {
+                const mockFriends = [
+                    { id: 'FRIEND001', name: 'Alex Martin', level: 12, avatar: '🚀', status: 'En ligne', streak: 15 },
+                    { id: 'FRIEND002', name: 'Sophie Dubois', level: 8, avatar: '🌟', status: 'Hors ligne', streak: 7 },
+                    { id: 'FRIEND003', name: 'Lucas Chen', level: 25, avatar: '⚡', status: 'En ligne', streak: 32 }
+                ];
+
+                return mockFriends.filter(friend => 
+                    friend.name.toLowerCase().includes(searchTerm.toLowerCase())
+                );
+            }
+
+            static async challengeFriend(friendId, challengeType) {
+                showNotification(`🏆 Défi envoyé à ${friendId} !`, 'success');
+                return true;
+            }
+        }
+
+        // Chargement et sauvegarde enrichis
+        async function loadGameData() {
+            try {
+                const saved = localStorage.getItem('lifeRPGData');
+                if (saved) {
+                    const savedState = JSON.parse(saved);
+                    gameState = { ...gameState, ...savedState };
+                }
+
+                // Vérifier sync cloud si email configuré
+                if (gameState.player.email) {
+                    const cloudData = await CloudSync.syncFromCloud(gameState.player.id);
+                    if (cloudData && cloudData.lastSync > gameState.sync.lastSync) {
+                        const useCloud = confirm('🌩️ Données cloud plus récentes trouvées. Les utiliser ?');
+                        if (useCloud) {
+                            gameState = { ...gameState, ...cloudData };
+                        }
+                    }
+                }
+
+                // Vérifier nouveau jour
+                const today = new Date().toDateString();
+                if (gameState.player.lastLogin !== today) {
+                    await handleNewDay();
+                }
+
+                await updateUI();
+                
+                if (gameState.player.name) {
+                    document.getElementById('setupModal').style.display = 'none';
+                    showWelcomeMessage();
+                    updateWeather();
+                }
+
+            } catch (error) {
+                console.error('❌ Erreur chargement:', error);
+                showNotification('⚠️ Erreur de chargement des données', 'error');
+            }
+        }
+
+        async function saveGameData() {
+            try {
+                localStorage.setItem('lifeRPGData', JSON.stringify(gameState));
+                
+                if (gameState.player.email) {
+                    await CloudSync.syncToCloud(gameState);
+                }
+
+                gameState.sync.lastSync = Date.now();
+                
+            } catch (error) {
+                console.error('❌ Erreur sauvegarde:', error);
+            }
+        }
+
+        // Gestion nouveau jour
+        async function handleNewDay() {
+            gameState.player.lastLogin = new Date().toDateString();
+            gameState.player.energy = gameState.player.maxEnergy;
+            gameState.player.health = Math.min(gameState.player.maxHealth, gameState.player.health + 10);
+            gameState.stats.dailyXP = 0;
+            
+            await generateDailyQuests();
+            showNotification('🌅 Nouveau jour, nouvelles quêtes ! Bonne chance !', 'success');
+        }
+
+        // Configuration initiale enrichie
+        async function startGame() {
+            const name = document.getElementById('playerNameInput').value.trim();
+            const email = document.getElementById('playerEmailInput').value.trim();
+            const age = parseInt(document.getElementById('playerAgeInput').value);
+            const goal = document.getElementById('playerGoalInput').value;
+            const timezone = document.getElementById('playerTimezoneInput').value;
+
+            if (!name || !age || !goal) {
+                showNotification('❌ Veuillez remplir les champs obligatoires !', 'error');
+                return;
+            }
+
+            gameState.player = {
+                ...gameState.player,
+                name,
+                email,
+                age,
+                goal,
+                timezone,
+                createdAt: Date.now()
+            };
+
+            document.getElementById('playerId').textContent = `#${gameState.player.id}`;
+
+            await generateDailyQuests();
+            document.getElementById('setupModal').style.display = 'none';
+            
+            await updateUI();
+            await saveGameData();
+
+            showNotification(`🎉 Bienvenue ${name} ! Votre aventure Life RPG commence !`, 'success');
+            
+            setTimeout(() => updateWeather(), 1000);
+            setTimeout(() => showTip(), 3000);
+        }
+
+        // Génération de quêtes enrichie
+        async function generateDailyQuests() {
+            const templates = questTemplates[gameState.player.goal] || questTemplates.équilibre;
+            const shuffled = [...templates].sort(() => 0.5 - Math.random());
+            
+            gameState.quests = shuffled.slice(0, 4).map((template, index) => ({
+                id: `quest_${Date.now()}_${index}`,
+                ...template,
+                completed: false,
+                date: new Date().toDateString(),
+                progress: 0,
+                timeCreated: Date.now()
+            }));
+
+            // Ajouter une quête bonus aléatoire (10% de chance)
+            if (Math.random() < 0.1) {
+                const bonusQuest = {
+                    id: `bonus_${Date.now()}`,
+                    title: "🌟 Défi Bonus",
+                    description: "Surprise du jour !",
+                    xp: 75,
+                    energy: -10,
+                    health: 20,
+                    difficulty: "Bonus",
+                    category: "bonus",
+                    completed: false,
+                    date: new Date().toDateString(),
+                    isBonus: true
+                };
+                gameState.quests.push(bonusQuest);
+            }
+
+            await saveGameData();
+        }
+
+        // Système de complétion de quête enrichi
+        async function completeQuest(questId) {
+            const quest = gameState.quests.find(q => q.id === questId);
+            if (!quest || quest.completed) return;
+
+            // Animation de complétion
+            const questElement = document.querySelector(`[data-quest-id="${questId}"]`);
+            if (questElement) {
+                questElement.style.transform = 'scale(1.05)';
+                setTimeout(() => {
+                    questElement.style.transform = 'scale(1)';
+                }, 200);
+            }
+
+            quest.completed = true;
+            quest.completedAt = Date.now();
+
+            const xpGained = quest.xp;
+            const oldLevel = gameState.player.level;
+
+            gameState.player.xp += xpGained;
+            gameState.player.totalXP += xpGained;
+            gameState.player.energy = Math.max(0, Math.min(gameState.player.maxEnergy, gameState.player.energy + quest.energy));
+            gameState.player.health = Math.max(0, Math.min(gameState.player.maxHealth, gameState.player.health + (quest.health || 0)));
+            gameState.player.completedQuests++;
+            gameState.stats.dailyXP += xpGained;
+
+            await checkLevelUp(oldLevel);
+            updateStreak();
+            
+            await updateUI();
+            await saveGameData();
+
+            showFloatingXP(`+${xpGained} XP`, getRandomPosition());
+            showNotification(`✅ ${quest.title} complétée ! +${xpGained} XP`, 'success');
+
+            if (gameState.quests.every(q => q.completed)) {
+                setTimeout(async () => {
+                    const bonus = 100;
+                    gameState.player.xp += bonus;
+                    gameState.player.totalXP += bonus;
+                    gameState.stats.dailyXP += bonus;
+                    
+                    showFloatingXP(`+${bonus} XP BONUS!`, getRandomPosition());
+                    showNotification('🎊 Toutes les quêtes terminées ! Bonus parfait !', 'achievement');
+                    
+                    await updateUI();
+                    await saveGameData();
+                }, 1000);
+            }
+        }
+
+        // Système de level up enrichi
+        async function checkLevelUp(oldLevel) {
+            const xpForNextLevel = gameState.player.level * 100;
+            
+            if (gameState.player.xp >= xpForNextLevel) {
+                gameState.player.level++;
+                gameState.player.xp -= xpForNextLevel;
+                gameState.player.maxEnergy += 15;
+                gameState.player.maxHealth += 10;
+                gameState.player.energy = gameState.player.maxEnergy;
+                gameState.player.health = gameState.player.maxHealth;
+
+                createLevelUpAnimation();
+                showNotification(`🚀 NIVEAU ${gameState.player.level} ! Nouvelles capacités débloquées !`, 'achievement');
+
+                if (navigator.vibrate) {
+                    navigator.vibrate([200, 100, 200, 100, 200]);
+                }
+            }
+        }
+
+        // Activités enrichies
+        async function addCustomActivity() {
+            const activity = prompt('🎯 Décrivez votre accomplissement :');
+            if (!activity || activity.trim().length < 3) return;
+
+            const xp = Math.floor(Math.random() * 30) + 20;
+            gameState.player.xp += xp;
+            gameState.player.totalXP += xp;
+            gameState.player.energy = Math.max(0, gameState.player.energy - 10);
+            gameState.stats.dailyXP += xp;
+
+            await checkLevelUp(gameState.player.level);
+            await updateUI();
+            await saveGameData();
+
+            showFloatingXP(`+${xp} XP`, getRandomPosition());
+            showNotification(`🎯 Activité ajoutée ! +${xp} XP`, 'success');
+        }
+
+        async function dailyReflection() {
+            if (gameState.player.energy < 10) {
+                showNotification('⚡ Pas assez d\'énergie ! Reposez-vous d\'abord.', 'error');
+                return;
+            }
+
+            const prompts = [
+                "Qu'avez-vous accompli aujourd'hui dont vous êtes fier ?",
+                "Quelle leçon importante avez-vous apprise récemment ?",
+                "Comment vous rapprochez-vous de vos objectifs ?",
+                "Qu'allez-vous améliorer demain ?",
+                "Quel moment vous a apporté le plus de joie aujourd'hui ?"
+            ];
+
+            const randomPrompt = prompts[Math.floor(Math.random() * prompts.length)];
+            const reflection = prompt(`🧘 Réflexion du jour :\n\n${randomPrompt}\n\n(Optionnel)`);
+
+            let xp = 25;
+            let energy = 15;
+            let health = 10;
+
+            if (reflection && reflection.trim().length > 20) {
+                xp += 15;
+                energy += 10;
+                health += 10;
+                showNotification('✨ Réflexion approfondie ! Bonus mental !', 'success');
+            }
+
+            gameState.player.xp += xp;
+            gameState.player.totalXP += xp;
+            gameState.player.energy = Math.min(gameState.player.maxEnergy, gameState.player.energy + energy);
+            gameState.player.health = Math.min(gameState.player.maxHealth, gameState.player.health + health);
+            gameState.stats.dailyXP += xp;
+
+            await checkLevelUp(gameState.player.level);
+            await updateUI();
+            await saveGameData();
+
+            showFloatingXP(`+${xp} XP`, getRandomPosition());
+            showNotification(`🧘 Réflexion terminée ! +${xp} XP, +${energy} Énergie`, 'success');
+        }
+
+        async function setGoal() {
+            const goalPrompts = [
+                "Définissez un objectif pour demain",
+                "Quel défi voulez-vous relever cette semaine ?",
+                "Quelle nouvelle habitude souhaitez-vous développer ?",
+                "Sur quoi voulez-vous vous concentrer prioritairement ?"
+            ];
+
+            const randomPrompt = goalPrompts[Math.floor(Math.random() * goalPrompts.length)];
+            const goal = prompt(`🎯 ${randomPrompt} :`);
+
+            if (!goal || goal.trim().length < 5) return;
+
+            let xp = 15;
+            if (goal.trim().length > 30) {
+                xp += 20;
+                showNotification('🎯 Objectif détaillé ! Planification exemplaire !', 'success');
+            }
+
+            gameState.player.xp += xp;
+            gameState.player.totalXP += xp;
+            gameState.stats.dailyXP += xp;
+
+            gameState.player.currentGoal = {
+                text: goal,
+                createdAt: Date.now(),
+                completed: false
+            };
+
+            await checkLevelUp(gameState.player.level);
+            await updateUI();
+            await saveGameData();
+
+            showFloatingXP(`+${xp} XP`, getRandomPosition());
+            showNotification(`🎯 Objectif défini ! +${xp} XP`, 'success');
+        }
+
+        // Fonctionnalités sociales
+        async function findFriends() {
+            const searchTerm = prompt('🔍 Rechercher des amis par nom :');
+            if (!searchTerm) return;
+
+            try {
+                const friends = await CloudSync.findFriends(searchTerm);
+                
+                if (friends.length === 0) {
+                    showNotification('❌ Aucun ami trouvé avec ce nom', 'error');
+                    return;
+                }
+
+                let friendsList = '👥 Amis trouvés :\n\n';
+                friends.forEach((friend, index) => {
+                    friendsList += `${index + 1}. ${friend.name} (Niv.${friend.level}) ${friend.avatar}\n   Série: ${friend.streak} jours - ${friend.status}\n\n`;
+                });
+
+                friendsList += 'Tapez le numéro pour ajouter un ami :';
+                const choice = prompt(friendsList);
+                const friendIndex = parseInt(choice) - 1;
+
+                if (friendIndex >= 0 && friendIndex < friends.length) {
+                    const selectedFriend = friends[friendIndex];
+                    gameState.friends.push(selectedFriend);
+                    await updateUI();
+                    await saveGameData();
+                    showNotification(`✅ ${selectedFriend.name} ajouté(e) à vos amis !`, 'success');
+                }
+
+            } catch (error) {
+                showNotification('❌ Erreur de recherche d\'amis', 'error');
+            }
+        }
+
+        async function shareProgress() {
+            const shareData = {
+                title: 'Life RPG - Mon Progrès',
+                text: `🎮 Niveau ${gameState.player.level} | 🎯 ${gameState.player.completedQuests} quêtes | 🔥 ${gameState.player.currentStreak} jours de série`,
+                url: window.location.href
+            };
+
+            if (navigator.share) {
+                try {
+                    await navigator.share(shareData);
+                    showNotification('📤 Progrès partagé !', 'success');
+                    
+                    gameState.player.xp += 10;
+                    gameState.player.totalXP += 10;
+                    await updateUI();
+                    await saveGameData();
+                } catch (error) {
+                    copyToClipboard(shareData.text);
+                }
+            } else {
+                copyToClipboard(shareData.text);
+            }
+        }
+
+        function copyToClipboard(text) {
+            navigator.clipboard.writeText(text).then(() => {
+                showNotification('📋 Progrès copié dans le presse-papiers !', 'success');
+            });
+        }
+
+        async function joinChallenge() {
+            const challenges = [
+                { name: "Marathon 30 jours", description: "Complétez toutes vos quêtes pendant 30 jours", reward: 1000, participants: 1247 },
+                { name: "Équilibre Zen", description: "Méditation quotidienne pendant 7 jours", reward: 350, participants: 892 },
+                { name: "Créativité Express", description: "Une création par jour pendant 14 jours", reward: 750, participants: 634 }
+            ];
+
+            let challengeText = '🏆 Défis Globaux Disponibles :\n\n';
+            challenges.forEach((challenge, index) => {
+                challengeText += `${index + 1}. ${challenge.name}\n   ${challenge.description}\n   Récompense: ${challenge.reward} XP | ${challenge.participants} participants\n\n`;
+            });
+
+            challengeText += 'Tapez le numéro pour rejoindre un défi :';
+            const choice = prompt(challengeText);
+            const challengeIndex = parseInt(choice) - 1;
+
+            if (challengeIndex >= 0 && challengeIndex < challenges.length) {
+                const selectedChallenge = challenges[challengeIndex];
+                gameState.challenges.push({
+                    ...selectedChallenge,
+                    joinedAt: Date.now(),
+                    progress: 0
+                });
+
+                await saveGameData();
+                showNotification(`🏆 Défi "${selectedChallenge.name}" rejoint ! Bonne chance !`, 'achievement');
+            }
+        }
+
+        // Interface utilisateur enrichie
+        async function updateUI() {
+            const player = gameState.player;
+            
+            // Informations du joueur
+            document.getElementById('playerName').textContent = player.name || 'Créez votre profil';
+            document.getElementById('playerId').textContent = `#${player.id}`;
+            document.getElementById('playerLevel').textContent = player.level;
+            document.getElementById('playerTitle').textContent = getPlayerTitle();
+
+            // Barres de progression
+            const xpForNextLevel = player.level * 100;
+            const xpPercent = Math.min(100, (player.xp / xpForNextLevel) * 100);
+            const energyPercent = (player.energy / player.maxEnergy) * 100;
+            const healthPercent = (player.health / player.maxHealth) * 100;
+
+            document.getElementById('xpBar').style.width = `${xpPercent}%`;
+            document.getElementById('xpText').textContent = `${player.xp}/${xpForNextLevel}`;
+            document.getElementById('energyBar').style.width = `${energyPercent}%`;
+            document.getElementById('energyText').textContent = `${player.energy}/${player.maxEnergy}`;
+            document.getElementById('healthBar').style.width = `${healthPercent}%`;
+            document.getElementById('healthText').textContent = `${player.health}/${player.maxHealth}`;
+
+            // Statistiques rapides
+            document.getElementById('totalXP').textContent = player.totalXP.toLocaleString();
+            document.getElementById('completedQuests').textContent = player.completedQuests;
+            document.getElementById('currentStreak').textContent = player.currentStreak;
+            document.getElementById('friendsCount').textContent = gameState.friends.length;
+
+            // Avatar
+            document.getElementById('playerAvatar').textContent = player.avatar;
+
+            // Quêtes et amis
+            displayQuests();
+            displayFriends();
+        }
+
+        function displayQuests() {
+            const questsList = document.getElementById('questsList');
+            questsList.innerHTML = '';
+
+            gameState.quests.forEach(quest => {
+                const questElement = document.createElement('div');
+                questElement.className = `quest-item ${quest.completed ? 'completed' : ''} ${quest.isBonus ? 'bonus' : ''}`;
+                questElement.setAttribute('data-quest-id', quest.id);
+                questElement.onclick = () => quest.completed ? null : completeQuest(quest.id);
+
+                const difficultyColor = {
+                    'Facile': '#27ae60',
+                    'Moyen': '#f39c12',
+                    'Difficile': '#e74c3c',
+                    'Bonus': '#9b59b6'
+                }[quest.difficulty] || '#667eea';
+
+                questElement.innerHTML = `
+                    <div class="quest-header">
+                        <div class="quest-title">
+                            ${quest.completed ? '✅' : '⭕'} ${quest.title}
+                            ${quest.isBonus ? ' 🌟' : ''}
+                        </div>
+                        <div class="quest-difficulty" style="background-color: ${difficultyColor}20; color: ${difficultyColor};">
+                            ${quest.difficulty}
+                        </div>
+                    </div>
+                    <div class="quest-description">${quest.description}</div>
+                    <div class="quest-rewards">
+                        <div class="reward-item xp-reward">
+                            ⭐ +${quest.xp} XP
+                        </div>
+                        ${quest.energy !== 0 ? `
+                            <div class="reward-item energy-reward">
+                                ⚡ ${quest.energy > 0 ? '+' : ''}${quest.energy}
+                            </div>
+                        ` : ''}
+                        ${quest.health > 0 ? `
+                            <div class="reward-item skill-reward">
+                                ❤️ +${quest.health}
+                            </div>
+                        ` : ''}
+                        <div class="reward-item skill-reward">
+                            🏷️ ${quest.category}
+                        </div>
+                    </div>
+                `;
+
+                questsList.appendChild(questElement);
+            });
+        }
+
+        function displayFriends() {
+            const friendsList = document.getElementById('friendsList');
+            friendsList.innerHTML = '';
+
+            if (gameState.friends.length === 0) {
+                friendsList.innerHTML = '<p style="text-align: center; color: #7f8c8d; padding: 20px;">Aucun ami pour le moment. Utilisez "👥 Amis" pour en trouver !</p>';
+                return;
+            }
+
+            gameState.friends.forEach(friend => {
+                const friendElement = document.createElement('div');
+                friendElement.className = 'friend-item';
+
+                friendElement.innerHTML = `
+                    <div class="friend-avatar">${friend.avatar}</div>
+                    <div class="friend-info">
+                        <div class="friend-name">${friend.name}</div>
+                        <div class="friend-status">Niv.${friend.level} • ${friend.streak} jours • ${friend.status}</div>
+                    </div>
+                    <button class="challenge-button" onclick="challengeFriend('${friend.id}')">
+                        ⚔️ Défier
+                    </button>
+                `;
+
+                friendsList.appendChild(friendElement);
+            });
+        }
+
+        async function challengeFriend(friendId) {
+            const friend = gameState.friends.find(f => f.id === friendId);
+            if (!friend) return;
+
+            const challengeTypes = [
+                'Défi XP 24h',
+                'Défi Série',
+                'Défi Créativité',
+                'Défi Bien-être'
+            ];
+
+            const challenge = prompt(`⚔️ Défiez ${friend.name} :\n\n${challengeTypes.map((c, i) => `${i+1}. ${c}`).join('\n')}\n\nTapez le numéro :`);
+            const challengeIndex = parseInt(challenge) - 1;
+
+            if (challengeIndex >= 0 && challengeIndex < challengeTypes.length) {
+                await CloudSync.challengeFriend(friendId, challengeTypes[challengeIndex]);
+                
+                gameState.player.xp += 5;
+                gameState.player.totalXP += 5;
+                await updateUI();
+                await saveGameData();
+            }
+        }
+
+        function viewProgress() {
+            const player = gameState.player;
+            const completionRate = gameState.quests.length > 0 ? 
+                ((gameState.quests.filter(q => q.completed).length / gameState.quests.length) * 100).toFixed(1) : 0;
+
+            const stats = `
+📊 Tableau de Bord Complet
+
+👤 Profil:
+• ${player.name} ${player.avatar} (ID: #${player.id})
+• Niveau ${player.level} - ${getPlayerTitle()}
+• Créé le ${new Date(player.createdAt).toLocaleDateString()}
+
+📈 Progression:
+• XP Total: ${player.totalXP.toLocaleString()}
+• Quêtes Complétées: ${player.completedQuests}
+• Série Actuelle: ${player.currentStreak} jours
+• Taux de Réussite Aujourd'hui: ${completionRate}%
+
+⚡ Stats Actuelles:
+• Énergie: ${player.energy}/${player.maxEnergy}
+• Bien-être: ${player.health}/${player.maxHealth}
+• XP Aujourd'hui: ${gameState.stats.dailyXP}
+
+🤝 Social:
+• Amis: ${gameState.friends.length}
+• Défis Actifs: ${gameState.challenges.length}
+
+🎯 Objectif Principal: ${player.goal}
+${player.currentGoal ? `📝 Objectif Actuel: "${player.currentGoal.text}"` : ''}
+
+Continuez votre magnifique progression ! 🚀
+            `;
+            
+            alert(stats);
+        }
+
+        // Fonctions utilitaires
+        function getPlayerTitle() {
+            const level = gameState.player.level;
+            if (level < 5) return '🌱 Débutant';
+            if (level < 10) return '⚡ Apprenti';
+            if (level < 20) return '🎯 Aventurier';
+            if (level < 35) return '🏆 Expert';
+            if (level < 50) return '👑 Maître';
+            return '🌟 Légende';
+        }
+
+        function updateStreak() {
+            const today = new Date().toDateString();
+            const completedToday = gameState.quests.filter(q => q.completed && q.date === today).length;
+            const totalToday = gameState.quests.filter(q => q.date === today).length;
+            
+            if (completedToday === totalToday && totalToday > 0) {
+                gameState.player.currentStreak++;
+                
+                const milestones = [3, 7, 14, 30, 50, 100];
+                if (milestones.includes(gameState.player.currentStreak)) {
+                    const bonus = gameState.player.currentStreak * 20;
+                    gameState.player.xp += bonus;
+                    gameState.player.totalXP += bonus;
+                    
+                    showNotification(`🔥 ${gameState.player.currentStreak} JOURS DE SÉRIE ! +${bonus} XP !`, 'achievement');
+                    showFloatingXP(`+${bonus} XP SÉRIE!`, getRandomPosition());
+                }
+            }
+        }
+
+        function showFloatingXP(text, position) {
+            const floatingText = document.createElement('div');
+            floatingText.className = 'floating-xp';
+            floatingText.textContent = text;
+            floatingText.style.color = getRandomColor();
+            floatingText.style.left = position.x + 'px';
+            floatingText.style.top = position.y + 'px';
+            
+            document.body.appendChild(floatingText);
+            
+            setTimeout(() => {
+                floatingText.remove();
+            }, 3000);
+        }
+
+        function getRandomPosition() {
+            return {
+                x: Math.random() * (window.innerWidth - 200) + 100,
+                y: Math.random() * 300 + 200
+            };
+        }
+
+        function getRandomColor() {
+            const colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c'];
+            return colors[Math.floor(Math.random() * colors.length)];
+        }
+
+        function createLevelUpAnimation() {
+            const levelUpDiv = document.createElement('div');
+            levelUpDiv.style.cssText = `
+                position: fixed;
+                top: 50%;
+                left: 50%;
+                transform: translate(-50%, -50%);
+                background: linear-gradient(45deg, #f39c12, #e67e22);
+                color: white;
+                padding: 30px 40px;
+                border-radius: 20px;
+                font-size: 2.5rem;
+                font-weight: bold;
+                z-index: 2000;
+                animation: levelUpPulse 3s ease-in-out;
+                pointer-events: none;
+                box-shadow: 0 0 50px rgba(243, 156, 18, 0.7);
+            `;
+            levelUpDiv.innerHTML = `🎉 NIVEAU ${gameState.player.level} ! 🎉`;
+            document.body.appendChild(levelUpDiv);
+            
+            setTimeout(() => {
+                levelUpDiv.remove();
+            }, 3000);
+        }
+
+        function showNotification(message, type = 'success') {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            
+            document.getElementById('notifications').appendChild(notification);
+            
+            setTimeout(() => {
+                notification.style.animation = 'slideOutRight 0.4s ease-in-out';
+                setTimeout(() => {
+                    notification.remove();
+                }, 400);
+            }, 4000);
+        }
+
+        function showWelcomeMessage() {
+            const hour = new Date().getHours();
+            let greeting;
+            
+            if (hour < 12) greeting = "Bonjour";
+            else if (hour < 18) greeting = "Bon après-midi";
+            else greeting = "Bonsoir";
+            
+            const messages = [
+                `${greeting} ${gameState.player.name} ! 🌟 Prêt pour une journée épique ?`,
+                `${greeting} champion ! 🏆 Vos quêtes vous attendent !`,
+                `${greeting} ! ⚡ Transformons cette journée en victoire !`
+            ];
+            
+            const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+            
+            setTimeout(() => {
+                showNotification(randomMessage, 'success');
+            }, 1500);
+        }
+
+        function showTip() {
+            const tips = [
+                "💡 Conseil : Complétez vos quêtes régulièrement pour maintenir votre série !",
+                "🎯 Astuce : Les activités personnalisées donnent plus d'XP si vous les décrivez en détail !",
+                "⚡ Info : Votre énergie se restaure automatiquement chaque nouveau jour !",
+                "🤝 Social : Ajoutez des amis pour des défis collaboratifs !",
+                "🏆 Objectif : Atteignez le niveau 10 pour débloquer de nouvelles fonctionnalités !"
+            ];
+            
+            const randomTip = tips[Math.floor(Math.random() * tips.length)];
+            showNotification(randomTip, 'success');
+        }
+
+        // Interactions spéciales
+        document.addEventListener('DOMContentLoaded', () => {
+            setTimeout(() => {
+                const avatar = document.getElementById('playerAvatar');
+                if (avatar) {
+                    avatar.addEventListener('click', async () => {
+                        const messages = [
+                            "Vous êtes incroyable ! 💪",
+                            "Continuez comme ça, champion ! 🏆",
+                            "Votre progression est fantastique ! 🌟",
+                            "Vous inspirez les autres ! ✨"
+                        ];
+                        
+                        const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+                        showNotification(randomMessage, 'success');
+                        
+                        gameState.player.xp += 1;
+                        gameState.player.totalXP += 1;
+                        showFloatingXP('+1 XP ❤️', getRandomPosition());
+                        
+                        await updateUI();
+                        await saveGameData();
+                    });
+                }
+            }, 1000);
+        });
+
+        // Auto-sauvegarde et synchronisation
+        setInterval(async () => {
+            if (gameState.player.name) {
+                await saveGameData();
+            }
+        }, CONFIG.SYNC_INTERVAL);
+
+        // Gestionnaire de notifications push (PWA)
+        async function requestNotificationPermission() {
+            if ('Notification' in window && 'serviceWorker' in navigator) {
+                const permission = await Notification.requestPermission();
+                if (permission === 'granted') {
+                    console.log('✅ Notifications activées');
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function scheduleNotification(title, body, delay) {
+            if ('Notification' in window && Notification.permission === 'granted') {
+                setTimeout(() => {
+                    new Notification(title, {
+                        body,
+                        icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>",
+                        badge: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>"
+                    });
+                }, delay);
+            }
+        }
+
+        // Initialisation de l'application
+        window.addEventListener('load', async () => {
+            console.log('🎮 Life RPG v2.0 - Initialisation...');
+            
+            await loadGameData();
+            
+            setTimeout(async () => {
+                if (gameState.player.name && gameState.player.preferences.notifications) {
+                    await requestNotificationPermission();
+                }
+            }, 5000);
+            
+            const now = new Date();
+            const tomorrow = new Date(now);
+            tomorrow.setDate(tomorrow.getDate() + 1);
+            tomorrow.setHours(9, 0, 0, 0);
+            
+            const timeUntilTomorrow = tomorrow.getTime() - now.getTime();
+            scheduleNotification(
+                '🌅 Life RPG',
+                'De nouvelles quêtes vous attendent ! Commencez votre journée en grand !',
+                timeUntilTomorrow
+            );
+            
+            console.log('✅ Life RPG initialisé avec succès');
+        });
+
+        // Gestion de la fermeture
+        window.addEventListener('beforeunload', async () => {
+            await saveGameData();
+        });
+
+        // Gestion hors ligne
+        window.addEventListener('online', () => {
+            showNotification('🌐 Connexion rétablie ! Synchronisation...', 'success');
+            saveGameData();
+        });
+
+        window.addEventListener('offline', () => {
+            showNotification('📱 Mode hors ligne activé', 'warning');
+        });
+    </script>
+</body>
+</html><!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Life RPG - Transformez votre vie en jeu</title>
+    
+    <!-- PWA Meta tags -->
+    <meta name="description" content="Transformez votre développement personnel en RPG addictif. Gagnez de l'XP en accomplissant vos objectifs quotidiens !">
+    <meta name="theme-color" content="#667eea">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="Life RPG">
+    
+    <!-- Icons for PWA -->
+    <link rel="icon" type="image/png" sizes="32x32" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>">
+    <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>">
+    
+    <!-- PWA Manifest -->
+    <link rel="manifest" href="data:application/json,{
+        'name': 'Life RPG - Votre Vie en Jeu',
+        'short_name': 'Life RPG',
+        'description': 'Transformez votre développement personnel en RPG addictif',
+        'start_url': './',
+        'display': 'standalone',
+        'background_color': '#667eea',
+        'theme_color': '#667eea',
+        'icons': [
+            {
+                'src': 'data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><text y=\".9em\" font-size=\"90\">🎮</text></svg>',
+                'sizes': '192x192',
+                'type': 'image/svg+xml'
+            }
+        ]
+    }">
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+            overflow-x: hidden;
+        }
+
+        .game-container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 10px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 20px;
+            margin-bottom: 20px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .player-info {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .avatar-section {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: linear-gradient(45deg, #ff6b6b, #4ecdc4);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            color: white;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .avatar:hover {
+            transform: scale(1.05) rotateZ(5deg);
+        }
+
+        .online-status {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            font-size: 0.8rem;
+            color: #27ae60;
+        }
+
+        .online-dot {
+            width: 8px;
+            height: 8px;
+            background: #27ae60;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .player-stats {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .player-name-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .player-name {
+            font-size: 1.8rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .player-id {
+            font-size: 0.8rem;
+            color: #7f8c8d;
+            font-family: monospace;
+        }
+
+        .level-info {
+            font-size: 1.2rem;
+            color: #7f8c8d;
+            font-weight: 600;
+        }
+
+        .stats-bars {
+            display: grid;
+            gap: 12px;
+        }
+
+        .stat-bar-container {
+            position: relative;
+        }
+
+        .stat-bar-label {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.9rem;
+            font-weight: 600;
+            margin-bottom: 5px;
+        }
+
+        .stat-bar {
+            background: rgba(236, 240, 241, 0.8);
+            border-radius: 12px;
+            height: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .stat-fill {
+            height: 100%;
+            border-radius: 12px;
+            transition: width 0.8s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .stat-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.4), transparent);
+            animation: shimmer 2s infinite;
+        }
+
+        .xp-bar { 
+            background: linear-gradient(90deg, #3498db, #2980b9);
+        }
+        
+        .energy-bar { 
+            background: linear-gradient(90deg, #f39c12, #e67e22);
+        }
+
+        .health-bar {
+            background: linear-gradient(90deg, #e74c3c, #c0392b);
+        }
+
+        .quick-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .stat-card {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 16px;
+            padding: 15px;
+            text-align: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            transition: all 0.3s ease;
+        }
+
+        .stat-card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .stat-label {
+            font-size: 0.85rem;
+            color: #7f8c8d;
+            margin-top: 5px;
+            font-weight: 600;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 20px;
+        }
+
+        .content-section {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 25px;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.15);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .section-title {
+            font-size: 1.4rem;
+            font-weight: 800;
+            color: #2c3e50;
+            margin-bottom: 25px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .quest-item {
+            background: linear-gradient(135deg, #f8f9fa 0%, rgba(255,255,255,0.8) 100%);
+            border: 2px solid transparent;
+            border-radius: 16px;
+            padding: 20px;
+            margin-bottom: 15px;
+            cursor: pointer;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .quest-item::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(102, 126, 234, 0.1), transparent);
+            transition: left 0.5s;
+        }
+
+        .quest-item:hover::before {
+            left: 100%;
+        }
+
+        .quest-item:hover {
+            transform: translateY(-3px) scale(1.02);
+            box-shadow: 0 8px 30px rgba(102, 126, 234, 0.2);
+            border-color: rgba(102, 126, 234, 0.3);
+        }
+
+        .quest-item.completed {
+            background: linear-gradient(135deg, #d4f6d4 0%, rgba(39, 174, 96, 0.1) 100%);
+            border-color: #27ae60;
+            transform: scale(0.98);
+        }
+
+        .quest-item.bonus {
+            border: 2px solid #f39c12;
+            background: linear-gradient(135deg, #fff3cd 0%, rgba(243, 156, 18, 0.1) 100%);
+        }
+
+        .quest-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            margin-bottom: 12px;
+        }
+
+        .quest-title {
+            font-weight: 700;
+            color: #2c3e50;
+            font-size: 1.1rem;
+            line-height: 1.3;
+        }
+
+        .quest-difficulty {
+            background: rgba(102, 126, 234, 0.1);
+            color: #667eea;
+            padding: 4px 8px;
+            border-radius: 8px;
+            font-size: 0.7rem;
+            font-weight: 600;
+        }
+
+        .quest-description {
+            color: #6c757d;
+            font-size: 0.95rem;
+            margin-bottom: 15px;
+            line-height: 1.4;
+        }
+
+        .quest-rewards {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 10px;
+        }
+
+        .reward-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .xp-reward {
+            background: rgba(52, 152, 219, 0.1);
+            color: #3498db;
+        }
+
+        .energy-reward {
+            background: rgba(243, 156, 18, 0.1);
+            color: #f39c12;
+        }
+
+        .skill-reward {
+            background: rgba(155, 89, 182, 0.1);
+            color: #9b59b6;
+        }
+
+        .activity-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+        }
+
+        .activity-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 16px;
+            padding: 20px;
+            cursor: pointer;
+            font-size: 1rem;
+            font-weight: 700;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+            text-align: center;
+        }
+
+        .activity-btn::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
+            transition: left 0.5s;
+        }
+
+        .activity-btn:hover::before {
+            left: 100%;
+        }
+
+        .activity-btn:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 10px 30px rgba(102, 126, 234, 0.4);
+        }
+
+        .activity-btn:disabled {
+            background: linear-gradient(135deg, #95a5a6, #7f8c8d);
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .collaboration-section {
+            margin-top: 20px;
+        }
+
+        .friend-item {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            padding: 15px;
+            background: rgba(255, 255, 255, 0.5);
+            border-radius: 12px;
+            margin-bottom: 10px;
+        }
+
+        .friend-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(45deg, #3498db, #2980b9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .friend-info {
+            flex: 1;
+        }
+
+        .friend-name {
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .friend-status {
+            font-size: 0.8rem;
+            color: #7f8c8d;
+        }
+
+        .challenge-button {
+            background: #e74c3c;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            font-weight: 600;
+        }
+
+        .modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            backdrop-filter: blur(5px);
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 20px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .form-group input, 
+        .form-group select,
+        .form-group textarea {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #e9ecef;
+            border-radius: 12px;
+            font-size: 1rem;
+            transition: border-color 0.3s ease;
+        }
+
+        .form-group input:focus,
+        .form-group select:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            padding: 15px 30px;
+            font-size: 1.1rem;
+            font-weight: 700;
+            cursor: pointer;
+            width: 100%;
+            transition: all 0.3s ease;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+        }
+
+        .notifications {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1001;
+            max-width: 350px;
+        }
+
+        .notification {
+            background: linear-gradient(135deg, #27ae60, #2ecc71);
+            color: white;
+            padding: 16px 20px;
+            border-radius: 12px;
+            margin-bottom: 10px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            animation: slideInRight 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .notification.error {
+            background: linear-gradient(135deg, #e74c3c, #c0392b);
+        }
+
+        .notification.warning {
+            background: linear-gradient(135deg, #f39c12, #e67e22);
+        }
+
+        .notification.achievement {
+            background: linear-gradient(135deg, #9b59b6, #8e44ad);
+        }
+
+        .floating-xp {
+            position: fixed;
+            font-weight: 800;
+            font-size: 1.4rem;
+            pointer-events: none;
+            z-index: 1500;
+            animation: floatUp 3s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .install-prompt {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            padding: 15px 25px;
+            border-radius: 50px;
+            cursor: pointer;
+            font-weight: 600;
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+            animation: slideInUp 0.4s ease;
+            z-index: 1000;
+        }
+
+        .weather-widget {
+            background: rgba(255, 255, 255, 0.9);
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        /* Animations */
+        @keyframes slideInRight {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        @keyframes slideInUp {
+            from { transform: translate(-50%, 100%); opacity: 0; }
+            to { transform: translate(-50%, 0); opacity: 1; }
+        }
+
+        @keyframes floatUp {
+            0% { opacity: 1; transform: translateY(0) scale(1); }
+            70% { opacity: 1; transform: translateY(-40px) scale(1.1); }
+            100% { opacity: 0; transform: translateY(-80px) scale(0.8); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @keyframes shimmer {
+            0% { left: -100%; }
+            100% { left: 100%; }
+        }
+
+        @keyframes levelUpPulse {
+            0% { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+            50% { transform: translate(-50%, -50%) scale(1.2); opacity: 1; }
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 0; }
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .game-container {
+                padding: 5px;
+            }
+            
+            .player-info {
+                grid-template-columns: 1fr;
+                text-align: center;
+                gap: 15px;
+            }
+            
+            .quick-stats {
+                grid-template-columns: repeat(2, 1fr);
+            }
+            
+            .activity-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .modal-content {
+                padding: 20px;
+                width: 95%;
+            }
+            
+            .notifications {
+                left: 10px;
+                right: 10px;
+                max-width: none;
+            }
+        }
+
+        @media (min-width: 769px) {
+            .main-content {
+                grid-template-columns: 2fr 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <!-- Header avec informations du joueur -->
+        <div class="header">
+            <div class="player-info">
+                <div class="avatar-section">
+                    <div class="avatar" id="playerAvatar">🎮</div>
+                    <div class="online-status">
+                        <div class="online-dot"></div>
+                        <span>En ligne</span>
+                    </div>
+                </div>
+                
+                <div class="player-stats">
+                    <div class="player-name-row">
+                        <div class="player-name" id="playerName">Créez votre profil</div>
+                        <div class="player-id" id="playerId">#0000</div>
+                    </div>
+                    
+                    <div class="level-info">
+                        Niveau <span id="playerLevel">1</span> - <span id="playerTitle">Débutant</span>
+                    </div>
+                    
+                    <div class="stats-bars">
+                        <div class="stat-bar-container">
+                            <div class="stat-bar-label">
+                                <span>🌟 Expérience</span>
+                                <span id="xpText">0/100</span>
+                            </div>
+                            <div class="stat-bar">
+                                <div class="stat-fill xp-bar" id="xpBar" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-bar-container">
+                            <div class="stat-bar-label">
+                                <span>⚡ Énergie</span>
+                                <span id="energyText">100/100</span>
+                            </div>
+                            <div class="stat-bar">
+                                <div class="stat-fill energy-bar" id="energyBar" style="width: 100%"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="stat-bar-container">
+                            <div class="stat-bar-label">
+                                <span>❤️ Bien-être</span>
+                                <span id="healthText">100/100</span>
+                            </div>
+                            <div class="stat-bar">
+                                <div class="stat-fill health-bar" id="healthBar" style="width: 100%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="quick-stats">
+                <div class="stat-card">
+                    <div class="stat-value" id="totalXP">0</div>
+                    <div class="stat-label">XP Total</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="completedQuests">0</div>
+                    <div class="stat-label">Quêtes</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="currentStreak">0</div>
+                    <div class="stat-label">Série</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="friendsCount">0</div>
+                    <div class="stat-label">Amis</div>
+                </div>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <!-- Section des quêtes -->
+            <div class="content-section">
+                <div class="section-title">
+                    🎯 Vos Quêtes du Jour
+                </div>
+                
+                <div class="weather-widget" id="weatherWidget">
+                    🌤️ Chargement de la météo...
+                </div>
+                
+                <div id="questsList">
+                    <!-- Les quêtes seront générées ici -->
+                </div>
+            </div>
+
+            <!-- Section des activités et collaboration -->
+            <div class="content-section">
+                <div class="section-title">
+                    ⚡ Actions & Social
+                </div>
+                
+                <div class="activity-grid">
+                    <button class="activity-btn" onclick="addCustomActivity()">
+                        ➕ Activité Perso
+                    </button>
+                    <button class="activity-btn" onclick="dailyReflection()">
+                        🧘 Réflexion
+                    </button>
+                    <button class="activity-btn" onclick="setGoal()">
+                        🎯 Objectif
+                    </button>
+                    <button class="activity-btn" onclick="viewProgress()">
+                        📊 Progrès
+                    </button>
+                    <button class="activity-btn" onclick="shareProgress()">
+                        📤 Partager
+                    </button>
+                    <button class="activity-btn" onclick="findFriends()">
+                        👥 Amis
+                    </button>
+                </div>
+                
+                <div class="collaboration-section">
+                    <h3 style="margin: 20px 0 15px 0; color: #2c3e50;">🤝 Vos Amis</h3>
+                    <div id="friendsList">
+                        <!-- Liste des amis -->
+                    </div>
+                    <button class="activity-btn" onclick="joinChallenge()" style="margin-top: 15px;">
+                        🏆 Défi Global
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal de configuration -->
+    <div class="modal" id="setupModal">
+        <div class="modal-content">
+            <h2 style="text-align: center; margin-bottom: 30px; color: #2c3e50;">
+                🎮 Créez votre Profil Life RPG
+            </h2>
+            
+            <div class="form-group">
+                <label for="playerNameInput">Nom d'aventurier :</label>
+                <input type="text" id="playerNameInput" placeholder="Votre nom ou pseudo">
+            </div>
+            
+            <div class="form-group">
+                <label for="playerEmailInput">Email (optionnel - pour synchronisation) :</label>
+                <input type="email" id="playerEmailInput" placeholder="votre@email.com">
+            </div>
+            
+            <div class="form-group">
+                <label for="playerAgeInput">Âge :</label>
+                <input type="number" id="playerAgeInput" min="13" max="100" placeholder="25">
+            </div>
+            
+            <div class="form-group">
+                <label for="playerGoalInput">Objectif principal :</label>
+                <select id="playerGoalInput">
+                    <option value="">Choisissez votre quête principale</option>
+                    <option value="santé">🏃‍♂️ Améliorer ma santé</option>
+                    <option value="carrière">💼 Développer ma carrière</option>
+                    <option value="apprentissage">📚 Apprendre constamment</option>
+                    <option value="relations">👥 Améliorer mes relations</option>
+                    <option value="créativité">🎨 Développer ma créativité</option>
+                    <option value="équilibre">⚖️ Équilibre de vie</option>
+                </select>
+            </div>
+            
+            <div class="form-group">
+                <label for="playerTimezoneInput">Fuseau horaire :</label>
+                <select id="playerTimezoneInput">
+                    <option value="Europe/Paris">🇫🇷 Paris (France)</option>
+                    <option value="Europe/London">🇬🇧 Londres (UK)</option>
+                    <option value="America/New_York">🇺🇸 New York (EST)</option>
+                    <option value="America/Los_Angeles">🇺🇸 Los Angeles (PST)</option>
+                    <option value="Asia/Tokyo">🇯🇵 Tokyo (JST)</option>
