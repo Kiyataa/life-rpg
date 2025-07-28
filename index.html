@@ -1,9 +1,8 @@
-</select>
+<div style="display: flex; gap: 10px; margin-top: 10px;">
+                <button class="btn-demo" onclick="fillDemo()">
+                    ⚡ Remplir Demo
+                </button>
             </div>
-            
-            <button class="btn-primary" onclick="startGame()">
-                🚀 Commencer l'Aventure
-            </button>
         </div>
     </div>
 
@@ -18,11 +17,11 @@
     <script>
         // Configuration et état global
         const CONFIG = {
-            API_BASE: 'https://api.liferpg.com', // Simulé pour GitHub Pages
+            API_BASE: 'https://api.liferpg.com',
             VERSION: '2.0.0',
             CACHE_NAME: 'life-rpg-v2',
             DB_NAME: 'LifeRPGDB',
-            SYNC_INTERVAL: 30000 // 30 secondes
+            SYNC_INTERVAL: 30000
         };
 
         // État du jeu enrichi
@@ -66,142 +65,6 @@
                 pending: []
             }
         };
-
-        // Base de données locale (IndexedDB)
-        class LifeRPGDB {
-            constructor() {
-                this.dbName = CONFIG.DB_NAME;
-                this.version = 1;
-            }
-
-            async init() {
-                return new Promise((resolve, reject) => {
-                    const request = indexedDB.open(this.dbName, this.version);
-                    
-                    request.onerror = () => reject(request.error);
-                    request.onsuccess = () => resolve(request.result);
-                    
-                    request.onupgradeneeded = (event) => {
-                        const db = event.target.result;
-                        
-                        // Store pour les données du joueur
-                        if (!db.objectStoreNames.contains('gameState')) {
-                            db.createObjectStore('gameState', { keyPath: 'id' });
-                        }
-                        
-                        // Store pour les quêtes
-                        if (!db.objectStoreNames.contains('quests')) {
-                            const questStore = db.createObjectStore('quests', { keyPath: 'id' });
-                            questStore.createIndex('date', 'date', { unique: false });
-                            questStore.createIndex('completed', 'completed', { unique: false });
-                        }
-                        
-                        // Store pour les amis
-                        if (!db.objectStoreNames.contains('friends')) {
-                            db.createObjectStore('friends', { keyPath: 'id' });
-                        }
-                        
-                        // Store pour le cache offline
-                        if (!db.objectStoreNames.contains('cache')) {
-                            db.createObjectStore('cache', { keyPath: 'key' });
-                        }
-                    };
-                });
-            }
-
-            async save(storeName, data) {
-                const db = await this.init();
-                const transaction = db.transaction([storeName], 'readwrite');
-                const store = transaction.objectStore(storeName);
-                return store.put(data);
-            }
-
-            async load(storeName, key) {
-                const db = await this.init();
-                const transaction = db.transaction([storeName], 'readonly');
-                const store = transaction.objectStore(storeName);
-                return store.get(key);
-            }
-
-            async loadAll(storeName) {
-                const db = await this.init();
-                const transaction = db.transaction([storeName], 'readonly');
-                const store = transaction.objectStore(storeName);
-                return store.getAll();
-            }
-        }
-
-        const db = new LifeRPGDB();
-
-        // Service Worker pour PWA
-        if ('serviceWorker' in navigator) {
-            window.addEventListener('load', () => {
-                const swCode = `
-                    const CACHE_NAME = 'life-rpg-v2';
-                    const urlsToCache = [
-                        '/',
-                        '/manifest.json'
-                    ];
-
-                    self.addEventListener('install', (event) => {
-                        event.waitUntil(
-                            caches.open(CACHE_NAME)
-                                .then((cache) => cache.addAll(urlsToCache))
-                        );
-                    });
-
-                    self.addEventListener('fetch', (event) => {
-                        event.respondWith(
-                            caches.match(event.request)
-                                .then((response) => {
-                                    if (response) {
-                                        return response;
-                                    }
-                                    return fetch(event.request);
-                                })
-                        );
-                    });
-
-                    // Background sync pour les données
-                    self.addEventListener('sync', (event) => {
-                        if (event.tag === 'background-sync') {
-                            event.waitUntil(syncGameData());
-                        }
-                    });
-
-                    async function syncGameData() {
-                        console.log('🔄 Synchronisation en arrière-plan...');
-                    }
-                `;
-
-                const blob = new Blob([swCode], {type: 'application/javascript'});
-                const swUrl = URL.createObjectURL(blob);
-
-                navigator.serviceWorker.register(swUrl)
-                    .then(() => console.log('✅ Service Worker enregistré'))
-                    .catch(err => console.log('❌ Service Worker failed:', err));
-            });
-        }
-
-        // Gestion de l'installation PWA
-        let deferredPrompt;
-        window.addEventListener('beforeinstallprompt', (e) => {
-            e.preventDefault();
-            deferredPrompt = e;
-            document.getElementById('installPrompt').style.display = 'block';
-        });
-
-        document.getElementById('installPrompt').addEventListener('click', async () => {
-            if (deferredPrompt) {
-                deferredPrompt.prompt();
-                const { outcome } = await deferredPrompt.userChoice;
-                if (outcome === 'accepted') {
-                    showNotification('🎉 App installée avec succès !', 'success');
-                }
-                deferredPrompt = null;
-                document.getElementById('installPrompt').style.display = 'none';
-            }
-        });
 
         // Génération d'ID unique
         function generatePlayerId() {
@@ -248,7 +111,76 @@
             ]
         };
 
-        // Système de météo (API simulée)
+        // Service Worker pour PWA
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                const swCode = `
+                    const CACHE_NAME = 'life-rpg-v2';
+                    const urlsToCache = [
+                        '/',
+                        '/manifest.json'
+                    ];
+
+                    self.addEventListener('install', (event) => {
+                        event.waitUntil(
+                            caches.open(CACHE_NAME)
+                                .then((cache) => cache.addAll(urlsToCache))
+                        );
+                    });
+
+                    self.addEventListener('fetch', (event) => {
+                        event.respondWith(
+                            caches.match(event.request)
+                                .then((response) => {
+                                    if (response) {
+                                        return response;
+                                    }
+                                    return fetch(event.request);
+                                })
+                        );
+                    });
+
+                    self.addEventListener('sync', (event) => {
+                        if (event.tag === 'background-sync') {
+                            event.waitUntil(syncGameData());
+                        }
+                    });
+
+                    async function syncGameData() {
+                        console.log('🔄 Synchronisation en arrière-plan...');
+                    }
+                `;
+
+                const blob = new Blob([swCode], {type: 'application/javascript'});
+                const swUrl = URL.createObjectURL(blob);
+
+                navigator.serviceWorker.register(swUrl)
+                    .then(() => console.log('✅ Service Worker enregistré'))
+                    .catch(err => console.log('❌ Service Worker failed:', err));
+            });
+        }
+
+        // Gestion de l'installation PWA
+        let deferredPrompt;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredPrompt = e;
+            document.getElementById('installPrompt').style.display = 'block';
+        });
+
+        document.getElementById('installPrompt').addEventListener('click', async () => {
+            if (deferredPrompt) {
+                deferredPrompt.prompt();
+                const { outcome } = await deferredPrompt.userChoice;
+                if (outcome === 'accepted') {
+                    showNotification('🎉 App installée avec succès !', 'success');
+                }
+                deferredPrompt = null;
+                document.getElementById('installPrompt').style.display = 'none';
+            }
+        });
+
+        // Système de météo
         async function updateWeather() {
             try {
                 const weatherConditions = ['☀️', '⛅', '🌤️', '🌧️', '⛈️', '❄️'];
@@ -264,7 +196,6 @@
                     <br><small style="color: #27ae60;">${weather.bonus}</small>
                 `;
 
-                // Bonus météo pour certaines quêtes
                 if (weather.condition === '☀️') {
                     gameState.quests.forEach(quest => {
                         if (quest.category === 'nature' && !quest.weatherBonus) {
@@ -325,7 +256,18 @@
             }
         }
 
-        // Chargement et sauvegarde enrichis
+        // Fonction de remplissage demo pour test rapide
+        function fillDemo() {
+            document.getElementById('playerNameInput').value = 'Julien';
+            document.getElementById('playerEmailInput').value = 'julien@demo.com';
+            document.getElementById('playerAgeInput').value = '26';
+            document.getElementById('playerGoalInput').value = 'relations';
+            document.getElementById('playerTimezoneInput').value = 'Europe/Paris';
+            
+            showNotification('💡 Données demo remplies ! Cliquez "Commencer" !', 'success');
+        }
+
+        // Chargement et sauvegarde
         async function loadGameData() {
             try {
                 const saved = localStorage.getItem('lifeRPGData');
@@ -334,7 +276,6 @@
                     gameState = { ...gameState, ...savedState };
                 }
 
-                // Vérifier sync cloud si email configuré
                 if (gameState.player.email) {
                     const cloudData = await CloudSync.syncFromCloud(gameState.player.id);
                     if (cloudData && cloudData.lastSync > gameState.sync.lastSync) {
@@ -345,7 +286,6 @@
                     }
                 }
 
-                // Vérifier nouveau jour
                 const today = new Date().toDateString();
                 if (gameState.player.lastLogin !== today) {
                     await handleNewDay();
@@ -391,7 +331,7 @@
             showNotification('🌅 Nouveau jour, nouvelles quêtes ! Bonne chance !', 'success');
         }
 
-        // Configuration initiale enrichie
+        // Configuration initiale
         async function startGame() {
             const name = document.getElementById('playerNameInput').value.trim();
             const email = document.getElementById('playerEmailInput').value.trim();
@@ -428,7 +368,7 @@
             setTimeout(() => showTip(), 3000);
         }
 
-        // Génération de quêtes enrichie
+        // Génération de quêtes
         async function generateDailyQuests() {
             const templates = questTemplates[gameState.player.goal] || questTemplates.équilibre;
             const shuffled = [...templates].sort(() => 0.5 - Math.random());
@@ -442,7 +382,6 @@
                 timeCreated: Date.now()
             }));
 
-            // Ajouter une quête bonus aléatoire (10% de chance)
             if (Math.random() < 0.1) {
                 const bonusQuest = {
                     id: `bonus_${Date.now()}`,
@@ -463,12 +402,11 @@
             await saveGameData();
         }
 
-        // Système de complétion de quête enrichi
+        // Système de complétion de quête
         async function completeQuest(questId) {
             const quest = gameState.quests.find(q => q.id === questId);
             if (!quest || quest.completed) return;
 
-            // Animation de complétion
             const questElement = document.querySelector(`[data-quest-id="${questId}"]`);
             if (questElement) {
                 questElement.style.transform = 'scale(1.05)';
@@ -515,7 +453,7 @@
             }
         }
 
-        // Système de level up enrichi
+        // Système de level up
         async function checkLevelUp(oldLevel) {
             const xpForNextLevel = gameState.player.level * 100;
             
@@ -728,17 +666,15 @@
             }
         }
 
-        // Interface utilisateur enrichie
+        // Interface utilisateur
         async function updateUI() {
             const player = gameState.player;
             
-            // Informations du joueur
             document.getElementById('playerName').textContent = player.name || 'Créez votre profil';
             document.getElementById('playerId').textContent = `#${player.id}`;
             document.getElementById('playerLevel').textContent = player.level;
             document.getElementById('playerTitle').textContent = getPlayerTitle();
 
-            // Barres de progression
             const xpForNextLevel = player.level * 100;
             const xpPercent = Math.min(100, (player.xp / xpForNextLevel) * 100);
             const energyPercent = (player.energy / player.maxEnergy) * 100;
@@ -751,396 +687,7 @@
             document.getElementById('healthBar').style.width = `${healthPercent}%`;
             document.getElementById('healthText').textContent = `${player.health}/${player.maxHealth}`;
 
-            // Statistiques rapides
-            document.getElementById('totalXP').textContent = player.totalXP.toLocaleString();
-            document.getElementById('completedQuests').textContent = player.completedQuests;
-            document.getElementById('currentStreak').textContent = player.currentStreak;
-            document.getElementById('friendsCount').textContent = gameState.friends.length;
-
-            // Avatar
-            document.getElementById('playerAvatar').textContent = player.avatar;
-
-            // Quêtes et amis
-            displayQuests();
-            displayFriends();
-        }
-
-        function displayQuests() {
-            const questsList = document.getElementById('questsList');
-            questsList.innerHTML = '';
-
-            gameState.quests.forEach(quest => {
-                const questElement = document.createElement('div');
-                questElement.className = `quest-item ${quest.completed ? 'completed' : ''} ${quest.isBonus ? 'bonus' : ''}`;
-                questElement.setAttribute('data-quest-id', quest.id);
-                questElement.onclick = () => quest.completed ? null : completeQuest(quest.id);
-
-                const difficultyColor = {
-                    'Facile': '#27ae60',
-                    'Moyen': '#f39c12',
-                    'Difficile': '#e74c3c',
-                    'Bonus': '#9b59b6'
-                }[quest.difficulty] || '#667eea';
-
-                questElement.innerHTML = `
-                    <div class="quest-header">
-                        <div class="quest-title">
-                            ${quest.completed ? '✅' : '⭕'} ${quest.title}
-                            ${quest.isBonus ? ' 🌟' : ''}
-                        </div>
-                        <div class="quest-difficulty" style="background-color: ${difficultyColor}20; color: ${difficultyColor};">
-                            ${quest.difficulty}
-                        </div>
-                    </div>
-                    <div class="quest-description">${quest.description}</div>
-                    <div class="quest-rewards">
-                        <div class="reward-item xp-reward">
-                            ⭐ +${quest.xp} XP
-                        </div>
-                        ${quest.energy !== 0 ? `
-                            <div class="reward-item energy-reward">
-                                ⚡ ${quest.energy > 0 ? '+' : ''}${quest.energy}
-                            </div>
-                        ` : ''}
-                        ${quest.health > 0 ? `
-                            <div class="reward-item skill-reward">
-                                ❤️ +${quest.health}
-                            </div>
-                        ` : ''}
-                        <div class="reward-item skill-reward">
-                            🏷️ ${quest.category}
-                        </div>
-                    </div>
-                `;
-
-                questsList.appendChild(questElement);
-            });
-        }
-
-        function displayFriends() {
-            const friendsList = document.getElementById('friendsList');
-            friendsList.innerHTML = '';
-
-            if (gameState.friends.length === 0) {
-                friendsList.innerHTML = '<p style="text-align: center; color: #7f8c8d; padding: 20px;">Aucun ami pour le moment. Utilisez "👥 Amis" pour en trouver !</p>';
-                return;
-            }
-
-            gameState.friends.forEach(friend => {
-                const friendElement = document.createElement('div');
-                friendElement.className = 'friend-item';
-
-                friendElement.innerHTML = `
-                    <div class="friend-avatar">${friend.avatar}</div>
-                    <div class="friend-info">
-                        <div class="friend-name">${friend.name}</div>
-                        <div class="friend-status">Niv.${friend.level} • ${friend.streak} jours • ${friend.status}</div>
-                    </div>
-                    <button class="challenge-button" onclick="challengeFriend('${friend.id}')">
-                        ⚔️ Défier
-                    </button>
-                `;
-
-                friendsList.appendChild(friendElement);
-            });
-        }
-
-        async function challengeFriend(friendId) {
-            const friend = gameState.friends.find(f => f.id === friendId);
-            if (!friend) return;
-
-            const challengeTypes = [
-                'Défi XP 24h',
-                'Défi Série',
-                'Défi Créativité',
-                'Défi Bien-être'
-            ];
-
-            const challenge = prompt(`⚔️ Défiez ${friend.name} :\n\n${challengeTypes.map((c, i) => `${i+1}. ${c}`).join('\n')}\n\nTapez le numéro :`);
-            const challengeIndex = parseInt(challenge) - 1;
-
-            if (challengeIndex >= 0 && challengeIndex < challengeTypes.length) {
-                await CloudSync.challengeFriend(friendId, challengeTypes[challengeIndex]);
-                
-                gameState.player.xp += 5;
-                gameState.player.totalXP += 5;
-                await updateUI();
-                await saveGameData();
-            }
-        }
-
-        function viewProgress() {
-            const player = gameState.player;
-            const completionRate = gameState.quests.length > 0 ? 
-                ((gameState.quests.filter(q => q.completed).length / gameState.quests.length) * 100).toFixed(1) : 0;
-
-            const stats = `
-📊 Tableau de Bord Complet
-
-👤 Profil:
-• ${player.name} ${player.avatar} (ID: #${player.id})
-• Niveau ${player.level} - ${getPlayerTitle()}
-• Créé le ${new Date(player.createdAt).toLocaleDateString()}
-
-📈 Progression:
-• XP Total: ${player.totalXP.toLocaleString()}
-• Quêtes Complétées: ${player.completedQuests}
-• Série Actuelle: ${player.currentStreak} jours
-• Taux de Réussite Aujourd'hui: ${completionRate}%
-
-⚡ Stats Actuelles:
-• Énergie: ${player.energy}/${player.maxEnergy}
-• Bien-être: ${player.health}/${player.maxHealth}
-• XP Aujourd'hui: ${gameState.stats.dailyXP}
-
-🤝 Social:
-• Amis: ${gameState.friends.length}
-• Défis Actifs: ${gameState.challenges.length}
-
-🎯 Objectif Principal: ${player.goal}
-${player.currentGoal ? `📝 Objectif Actuel: "${player.currentGoal.text}"` : ''}
-
-Continuez votre magnifique progression ! 🚀
-            `;
-            
-            alert(stats);
-        }
-
-        // Fonctions utilitaires
-        function getPlayerTitle() {
-            const level = gameState.player.level;
-            if (level < 5) return '🌱 Débutant';
-            if (level < 10) return '⚡ Apprenti';
-            if (level < 20) return '🎯 Aventurier';
-            if (level < 35) return '🏆 Expert';
-            if (level < 50) return '👑 Maître';
-            return '🌟 Légende';
-        }
-
-        function updateStreak() {
-            const today = new Date().toDateString();
-            const completedToday = gameState.quests.filter(q => q.completed && q.date === today).length;
-            const totalToday = gameState.quests.filter(q => q.date === today).length;
-            
-            if (completedToday === totalToday && totalToday > 0) {
-                gameState.player.currentStreak++;
-                
-                const milestones = [3, 7, 14, 30, 50, 100];
-                if (milestones.includes(gameState.player.currentStreak)) {
-                    const bonus = gameState.player.currentStreak * 20;
-                    gameState.player.xp += bonus;
-                    gameState.player.totalXP += bonus;
-                    
-                    showNotification(`🔥 ${gameState.player.currentStreak} JOURS DE SÉRIE ! +${bonus} XP !`, 'achievement');
-                    showFloatingXP(`+${bonus} XP SÉRIE!`, getRandomPosition());
-                }
-            }
-        }
-
-        function showFloatingXP(text, position) {
-            const floatingText = document.createElement('div');
-            floatingText.className = 'floating-xp';
-            floatingText.textContent = text;
-            floatingText.style.color = getRandomColor();
-            floatingText.style.left = position.x + 'px';
-            floatingText.style.top = position.y + 'px';
-            
-            document.body.appendChild(floatingText);
-            
-            setTimeout(() => {
-                floatingText.remove();
-            }, 3000);
-        }
-
-        function getRandomPosition() {
-            return {
-                x: Math.random() * (window.innerWidth - 200) + 100,
-                y: Math.random() * 300 + 200
-            };
-        }
-
-        function getRandomColor() {
-            const colors = ['#3498db', '#e74c3c', '#f39c12', '#27ae60', '#9b59b6', '#1abc9c'];
-            return colors[Math.floor(Math.random() * colors.length)];
-        }
-
-        function createLevelUpAnimation() {
-            const levelUpDiv = document.createElement('div');
-            levelUpDiv.style.cssText = `
-                position: fixed;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                background: linear-gradient(45deg, #f39c12, #e67e22);
-                color: white;
-                padding: 30px 40px;
-                border-radius: 20px;
-                font-size: 2.5rem;
-                font-weight: bold;
-                z-index: 2000;
-                animation: levelUpPulse 3s ease-in-out;
-                pointer-events: none;
-                box-shadow: 0 0 50px rgba(243, 156, 18, 0.7);
-            `;
-            levelUpDiv.innerHTML = `🎉 NIVEAU ${gameState.player.level} ! 🎉`;
-            document.body.appendChild(levelUpDiv);
-            
-            setTimeout(() => {
-                levelUpDiv.remove();
-            }, 3000);
-        }
-
-        function showNotification(message, type = 'success') {
-            const notification = document.createElement('div');
-            notification.className = `notification ${type}`;
-            notification.textContent = message;
-            
-            document.getElementById('notifications').appendChild(notification);
-            
-            setTimeout(() => {
-                notification.style.animation = 'slideOutRight 0.4s ease-in-out';
-                setTimeout(() => {
-                    notification.remove();
-                }, 400);
-            }, 4000);
-        }
-
-        function showWelcomeMessage() {
-            const hour = new Date().getHours();
-            let greeting;
-            
-            if (hour < 12) greeting = "Bonjour";
-            else if (hour < 18) greeting = "Bon après-midi";
-            else greeting = "Bonsoir";
-            
-            const messages = [
-                `${greeting} ${gameState.player.name} ! 🌟 Prêt pour une journée épique ?`,
-                `${greeting} champion ! 🏆 Vos quêtes vous attendent !`,
-                `${greeting} ! ⚡ Transformons cette journée en victoire !`
-            ];
-            
-            const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-            
-            setTimeout(() => {
-                showNotification(randomMessage, 'success');
-            }, 1500);
-        }
-
-        function showTip() {
-            const tips = [
-                "💡 Conseil : Complétez vos quêtes régulièrement pour maintenir votre série !",
-                "🎯 Astuce : Les activités personnalisées donnent plus d'XP si vous les décrivez en détail !",
-                "⚡ Info : Votre énergie se restaure automatiquement chaque nouveau jour !",
-                "🤝 Social : Ajoutez des amis pour des défis collaboratifs !",
-                "🏆 Objectif : Atteignez le niveau 10 pour débloquer de nouvelles fonctionnalités !"
-            ];
-            
-            const randomTip = tips[Math.floor(Math.random() * tips.length)];
-            showNotification(randomTip, 'success');
-        }
-
-        // Interactions spéciales
-        document.addEventListener('DOMContentLoaded', () => {
-            setTimeout(() => {
-                const avatar = document.getElementById('playerAvatar');
-                if (avatar) {
-                    avatar.addEventListener('click', async () => {
-                        const messages = [
-                            "Vous êtes incroyable ! 💪",
-                            "Continuez comme ça, champion ! 🏆",
-                            "Votre progression est fantastique ! 🌟",
-                            "Vous inspirez les autres ! ✨"
-                        ];
-                        
-                        const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-                        showNotification(randomMessage, 'success');
-                        
-                        gameState.player.xp += 1;
-                        gameState.player.totalXP += 1;
-                        showFloatingXP('+1 XP ❤️', getRandomPosition());
-                        
-                        await updateUI();
-                        await saveGameData();
-                    });
-                }
-            }, 1000);
-        });
-
-        // Auto-sauvegarde et synchronisation
-        setInterval(async () => {
-            if (gameState.player.name) {
-                await saveGameData();
-            }
-        }, CONFIG.SYNC_INTERVAL);
-
-        // Gestionnaire de notifications push (PWA)
-        async function requestNotificationPermission() {
-            if ('Notification' in window && 'serviceWorker' in navigator) {
-                const permission = await Notification.requestPermission();
-                if (permission === 'granted') {
-                    console.log('✅ Notifications activées');
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        function scheduleNotification(title, body, delay) {
-            if ('Notification' in window && Notification.permission === 'granted') {
-                setTimeout(() => {
-                    new Notification(title, {
-                        body,
-                        icon: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>",
-                        badge: "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>"
-                    });
-                }, delay);
-            }
-        }
-
-        // Initialisation de l'application
-        window.addEventListener('load', async () => {
-            console.log('🎮 Life RPG v2.0 - Initialisation...');
-            
-            await loadGameData();
-            
-            setTimeout(async () => {
-                if (gameState.player.name && gameState.player.preferences.notifications) {
-                    await requestNotificationPermission();
-                }
-            }, 5000);
-            
-            const now = new Date();
-            const tomorrow = new Date(now);
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            tomorrow.setHours(9, 0, 0, 0);
-            
-            const timeUntilTomorrow = tomorrow.getTime() - now.getTime();
-            scheduleNotification(
-                '🌅 Life RPG',
-                'De nouvelles quêtes vous attendent ! Commencez votre journée en grand !',
-                timeUntilTomorrow
-            );
-            
-            console.log('✅ Life RPG initialisé avec succès');
-        });
-
-        // Gestion de la fermeture
-        window.addEventListener('beforeunload', async () => {
-            await saveGameData();
-        });
-
-        // Gestion hors ligne
-        window.addEventListener('online', () => {
-            showNotification('🌐 Connexion rétablie ! Synchronisation...', 'success');
-            saveGameData();
-        });
-
-        window.addEventListener('offline', () => {
-            showNotification('📱 Mode hors ligne activé', 'warning');
-        });
-    </script>
-</body>
-</html><!DOCTYPE html>
+            <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
@@ -1157,24 +704,6 @@ Continuez votre magnifique progression ! 🚀
     <!-- Icons for PWA -->
     <link rel="icon" type="image/png" sizes="32x32" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>">
     <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>">
-    
-    <!-- PWA Manifest -->
-    <link rel="manifest" href="data:application/json,{
-        'name': 'Life RPG - Votre Vie en Jeu',
-        'short_name': 'Life RPG',
-        'description': 'Transformez votre développement personnel en RPG addictif',
-        'start_url': './',
-        'display': 'standalone',
-        'background_color': '#667eea',
-        'theme_color': '#667eea',
-        'icons': [
-            {
-                'src': 'data:image/svg+xml,<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100 100\"><text y=\".9em\" font-size=\"90\">🎮</text></svg>',
-                'sizes': '192x192',
-                'type': 'image/svg+xml'
-            }
-        ]
-    }">
 
     <style>
         * {
@@ -1631,33 +1160,35 @@ Continuez votre magnifique progression ! 🚀
         .modal-content {
             background: white;
             border-radius: 20px;
-            padding: 30px;
-            max-width: 500px;
+            padding: 20px;
+            max-width: 450px;
             width: 90%;
-            max-height: 80vh;
+            max-height: 85vh;
             overflow-y: auto;
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            position: relative;
         }
 
         .form-group {
-            margin-bottom: 20px;
+            margin-bottom: 15px;
         }
 
         .form-group label {
             display: block;
-            margin-bottom: 8px;
+            margin-bottom: 5px;
             font-weight: 600;
             color: #2c3e50;
+            font-size: 0.9rem;
         }
 
         .form-group input, 
         .form-group select,
         .form-group textarea {
             width: 100%;
-            padding: 12px;
+            padding: 10px;
             border: 2px solid #e9ecef;
-            border-radius: 12px;
-            font-size: 1rem;
+            border-radius: 8px;
+            font-size: 0.9rem;
             transition: border-color 0.3s ease;
         }
 
@@ -1673,17 +1204,30 @@ Continuez votre magnifique progression ! 🚀
             color: white;
             border: none;
             border-radius: 12px;
-            padding: 15px 30px;
-            font-size: 1.1rem;
+            padding: 12px 20px;
+            font-size: 1rem;
             font-weight: 700;
             cursor: pointer;
             width: 100%;
             transition: all 0.3s ease;
+            margin-top: 10px;
         }
 
         .btn-primary:hover {
             transform: translateY(-2px);
             box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-demo {
+            background: #95a5a6;
+            color: white;
+            border: none;
+            padding: 10px;
+            border-radius: 8px;
+            width: 100%;
+            cursor: pointer;
+            font-size: 0.9rem;
+            margin-top: 10px;
         }
 
         .notifications {
@@ -1806,7 +1350,7 @@ Continuez votre magnifique progression ! 🚀
             }
             
             .modal-content {
-                padding: 20px;
+                padding: 15px;
                 width: 95%;
             }
             
@@ -1960,7 +1504,7 @@ Continuez votre magnifique progression ! 🚀
     <!-- Modal de configuration -->
     <div class="modal" id="setupModal">
         <div class="modal-content">
-            <h2 style="text-align: center; margin-bottom: 30px; color: #2c3e50;">
+            <h2 style="text-align: center; margin-bottom: 20px; color: #2c3e50; font-size: 1.3rem;">
                 🎮 Créez votre Profil Life RPG
             </h2>
             
@@ -1970,7 +1514,7 @@ Continuez votre magnifique progression ! 🚀
             </div>
             
             <div class="form-group">
-                <label for="playerEmailInput">Email (optionnel - pour synchronisation) :</label>
+                <label for="playerEmailInput">Email (optionnel) :</label>
                 <input type="email" id="playerEmailInput" placeholder="votre@email.com">
             </div>
             
@@ -2000,3 +1544,14 @@ Continuez votre magnifique progression ! 🚀
                     <option value="America/New_York">🇺🇸 New York (EST)</option>
                     <option value="America/Los_Angeles">🇺🇸 Los Angeles (PST)</option>
                     <option value="Asia/Tokyo">🇯🇵 Tokyo (JST)</option>
+                </select>
+            </div>
+            
+            <!-- BOUTONS VISIBLES -->
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button class="btn-primary" onclick="startGame()" style="background: linear-gradient(135deg, #27ae60, #2ecc71);">
+                    🚀 Commencer l'Aventure
+                </button>
+            </div>
+            
+            <div style="display: flex;
